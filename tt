@@ -1,0 +1,89 @@
+#!/usr/bin/env zsh
+#
+# tt - CLI für TimeTracking Online (Herrmann & Lenz Solutions)
+#
+# Spricht die öffentliche REST-API an:
+#   Doku:  https://demo.timetracking-online.com/api/docs/index.html
+#   Auth:  App-Token via HTTP Basic Auth  (curl -u 'user:app_...')
+#   Base:  https://<host>.timetracking-online.com/api
+#
+# Konfiguration:
+#   Host/User liegen in  ${TT_CONFIG:-~/.config/timetracking/config}
+#   Der App-Token wird im macOS-Schlüsselbund gespeichert (via `tt login`).
+#   Alternativ per Umgebungsvariablen: TT_HOST, TT_USER, TT_TOKEN.
+#
+# Abhängigkeiten: curl, jq (beides auf macOS vorhanden bzw. via brew).
+#
+# Aufbau: Dieses Skript bündelt nur Setup, Konstanten und das Argument-Parsing.
+# Die eigentliche Logik liegt in lib/*.zsh und wird unten gesourct:
+#   lib/util.zsh      Fehlerausgabe, Datum/Zeitraum-Helfer
+#   lib/config.zsh    Konfigdatei & Zugangsdaten (Schlüsselbund)
+#   lib/auth.zsh      Passwort-Anmeldung & Bearer-Token-Cache
+#   lib/http.zsh      HTTP-Requests & Zeitraum-Query-Parameter
+#   lib/jqlib.zsh     Gemeinsame jq-Bausteine (JQ_LIB)
+#   lib/commands.zsh  Sub-Kommandos & Hilfetext
+
+emulate -L zsh
+set -uo pipefail
+
+# Homebrew-Pfade sicherstellen - Skripte sourcen .zshrc nicht, daher fehlen
+# /opt/homebrew/bin (Apple Silicon) bzw. /usr/local/bin (Intel) sonst im PATH.
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+# ---------------------------------------------------------------------------
+# Konstanten & Konfiguration
+# ---------------------------------------------------------------------------
+typeset -g PROG=${0:t}
+typeset -g TT_DIR=${0:A:h}     # Verzeichnis dieses Skripts (Symlinks aufgelöst)
+typeset -g TT_LIB="${TT_DIR}/lib"
+typeset -g TT_CONFIG=${TT_CONFIG:-$HOME/.config/timetracking/config}
+typeset -g TOKEN_CACHE="${TT_CONFIG:h}/token-cache"
+typeset -g KEYCHAIN_SERVICE="timetracking-online"
+typeset -g TT_BEARER=""        # zwischengespeicherter JWT-Access-Token (password-Modus)
+
+# Globale Flags
+typeset -g OPT_JSON=0          # -j : rohes JSON statt formatierter Ausgabe
+typeset -g OPT_ACCOUNT=""      # -a : accountId (für Admin-Abfragen fremder User)
+
+# ---------------------------------------------------------------------------
+# Bibliotheken laden
+# ---------------------------------------------------------------------------
+for _lib in util config auth http jqlib commands; do
+  if [[ -r "${TT_LIB}/${_lib}.zsh" ]]; then
+    source "${TT_LIB}/${_lib}.zsh"
+  else
+    print -u2 -- "${PROG}: Bibliothek '${TT_LIB}/${_lib}.zsh' fehlt oder ist nicht lesbar."
+    exit 1
+  fi
+done
+unset _lib
+
+# ---------------------------------------------------------------------------
+# Argument-Parsing (globale Flags vor dem Befehl)
+# ---------------------------------------------------------------------------
+need curl
+need jq
+
+while (( $# )); do
+  case $1 in
+    -j|--json)    OPT_JSON=1; shift ;;
+    -a|--account) OPT_ACCOUNT=$2; shift 2 ;;
+    -h|--help)    usage; exit 0 ;;
+    --) shift; break ;;
+    -*) die "Unbekannte Option '$1' (siehe ${PROG} --help)" ;;
+    *) break ;;
+  esac
+done
+
+cmd=${1:-help}
+(( $# )) && shift
+
+case $cmd in
+  login)    cmd_login "$@" ;;
+  config)   cmd_config "$@" ;;
+  current|status|whoami) cmd_current "$@" ;;
+  range|zeitraum) cmd_range "$@" ;;
+  hours|stunden) cmd_hours "$@" ;;
+  help|"")  usage ;;
+  *)        die "Unbekannter Befehl '$cmd' (siehe ${PROG} --help)" ;;
+esac
