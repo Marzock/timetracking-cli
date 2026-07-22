@@ -54,3 +54,21 @@ default_to() {
     date -v19d -v+1m "+%Y-%m-%d"
   fi
 }
+
+# Buchungszeitstempel für heute erzeugen -> yyyy-mm-ddThh:mm:00±hh:mm
+# Ohne Argument (bzw. leer): aktuelle Uhrzeit.
+# Mit "hh:mm": heutiges Datum + angegebene Uhrzeit (Sekunden = 00).
+booking_ts() {
+  local t=${1:-} off
+  off=$(local_offset)
+  if [[ -z $t ]]; then
+    date "+%Y-%m-%dT%H:%M:%S${off}"
+    return 0
+  fi
+  local hh=${t%%:*} mm=${t#*:}
+  [[ $t == *:* && $hh == <-> && $mm == <-> ]] \
+    || die "Ungültige Zeit '$t'. Erwartet: hh:mm (z.B. 09:00)."
+  (( 10#$hh <= 23 && 10#$mm <= 59 )) \
+    || die "Ungültige Zeit '$t'. Stunden 00-23, Minuten 00-59."
+  printf '%sT%02d:%02d:00%s\n' "$(date +%Y-%m-%d)" "$((10#$hh))" "$((10#$mm))" "$off"
+}

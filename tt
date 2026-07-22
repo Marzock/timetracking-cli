@@ -82,6 +82,8 @@ case $cmd in
   login)    cmd_login "$@" ;;
   config)   cmd_config "$@" ;;
   current|status|whoami) cmd_current "$@" ;;
+  in|kommen)    cmd_in "$@" ;;
+  out|gehen)    cmd_out "$@" ;;
   range|zeitraum) cmd_range "$@" ;;
   hours|stunden) cmd_hours "$@" ;;
   help|"")  usage ;;

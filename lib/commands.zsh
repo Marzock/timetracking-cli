@@ -84,7 +84,7 @@ cmd_range() {
         print "  from = ${TT_FROM:-<leer - Standard>}"
         print "  to   = ${TT_TO:-<leer - Standard>}"
       else
-        print "Kein Zeitraum gespeichert - es gilt der Standard (20.–19.):"
+        print "Kein Zeitraum gespeichert - es gilt der Standard (20.-19.):"
         print "  from = $(default_from)"
         print "  to   = $(default_to)"
       fi
@@ -92,7 +92,7 @@ cmd_range() {
     clear|reset)
       config_unset TT_FROM
       config_unset TT_TO
-      print "✓ Gespeicherter Zeitraum gelöscht - es gilt wieder der Standard (20.–19.)."
+      print "✓ Gespeicherter Zeitraum gelöscht - es gilt wieder der Standard (20.-19.)."
       ;;
     *)
       # Erlaubt:  range FROM TO   |   range --from D [--to D]   |   range --to D
@@ -146,7 +146,7 @@ cmd_hours() {
     esac
   done
   ensure_auth   # lädt u.a. gespeicherte TT_FROM/TT_TO aus der Konfiguration
-  # Vorrang: --from/--to (pro Aufruf) > gespeichert (TT_FROM/TT_TO) > Standard (20.–19.)
+  # Vorrang: --from/--to (pro Aufruf) > gespeichert (TT_FROM/TT_TO) > Standard (20.-19.)
   [[ -n $from ]] || from=${TT_FROM:-}
   [[ -n $to ]]   || to=${TT_TO:-}
   [[ -n $from ]] || from=$(default_from)
@@ -185,6 +185,65 @@ cmd_hours() {
   '
 }
 
+# Einloggen (Kommen/HomeOffice): Anfangsbuchung der Arbeitszeit anlegen.
+cmd_in() {
+  local time="" location="h" btype
+  while (( $# )); do
+    case $1 in
+      --time|-t)     time=$2; shift 2 ;;
+      --location|-l) location=$2; shift 2 ;;
+      *) die "in: unbekannte Option '$1' (siehe ${PROG} --help)" ;;
+    esac
+  done
+  case $location in
+    h|home|homeoffice|H)   btype=HOMEOFFICE ;;
+    b|buero|büro|office|B) btype=COMING ;;
+    *) die "in: --location muss 'h' (HomeOffice) oder 'b' (Büro/Kommen) sein." ;;
+  esac
+  ensure_auth
+  local ts; ts=$(booking_ts "$time") || return 1
+  local body
+  body=$(jq -n --arg ts "$ts" --arg bt "$btype" \
+    '{beginningDate:$ts, firstBookingType:$bt, balanceDay:($ts[0:10]),
+      bookingSourceBegin:"WEB", manualBooking:"N"}')
+  local out
+  out=$(request POST "/working_time/entries/my" --data-binary "$body") || return 1
+  if (( OPT_JSON )); then print -r -- "$out"; return; fi
+  print -r -- "$out" | jq -r '
+    (if .firstBookingType == "HOMEOFFICE" then "HomeOffice"
+     elif .firstBookingType == "COMING" then "Kommen (Büro)"
+     else .firstBookingType end) as $l
+    | "✓ Eingeloggt: \($l) um \(.beginningDate[11:16]) (\(.beginningDate[0:10]))"'
+}
+
+# Ausloggen (Gehen): laufende Arbeitszeit mit Endbuchung abschließen.
+cmd_out() {
+  local time=""
+  while (( $# )); do
+    case $1 in
+      --time|-t) time=$2; shift 2 ;;
+      *) die "out: unbekannte Option '$1' (siehe ${PROG} --help)" ;;
+    esac
+  done
+  ensure_auth
+  local cur id ending
+  cur=$(request GET "/working_time/entries/current") || return 1
+  id=$(print -r -- "$cur" | jq -r '.id // empty')
+  [[ -n $id ]] || die "Keine laufende Arbeitszeit gefunden - nichts zum Ausloggen."
+  ending=$(print -r -- "$cur" | jq -r '.endingDate // empty')
+  [[ -z $ending ]] || die "Aktuelle Arbeitszeit ist bereits beendet (Ende: $ending)."
+  local ts; ts=$(booking_ts "$time") || return 1
+  local body
+  body=$(jq -n --arg ts "$ts" \
+    '{endingDate:$ts, lastBookingType:"LEAVING", bookingSourceEnd:"WEB"}')
+  local out
+  out=$(request PUT "/working_time/entries/complete/${id}/my?adoptWorkingTime=false" \
+        --data-binary "$body") || return 1
+  if (( OPT_JSON )); then print -r -- "$out"; return; fi
+  print -r -- "$out" | jq -r "$JQ_LIB"'
+    "✓ Ausgeloggt um \(.endingDate[11:16]) (\(.endingDate[0:10]))   gearbeitet: \(dur_secs | hhmm) h"'
+}
+
 usage() {
   cat <<EOF
 ${PROG} - CLI für TimeTracking Online
@@ -193,24 +252,31 @@ AUFRUF
   ${PROG} [-j] [-a ACCOUNT_ID] <befehl> [optionen]
 
 GLOBALE OPTIONEN
-  -j, --json           Rohes JSON ausgeben (statt Tabelle)
-  -a, --account ID     accountId für Admin-Abfragen fremder Konten
-  -h, --help           Diese Hilfe
+  -j, --json           # Rohes JSON ausgeben (statt Tabelle)
+  -a, --account ID     # accountId für Admin-Abfragen fremder Konten
+  -h, --help           # Diese Hilfe
 
 BEFEHLE
-  login                Zugang einrichten: Passwort ODER App-Token (-> Schlüsselbund)
-  config               Aktuelle Konfiguration anzeigen
-  current              Aktuelle Arbeitszeit / Status (zeigt auch die eigene Account-ID)
+  login                                           # Zugang einrichten: Passwort ODER App-Token (-> Schlüsselbund)
+  config                                          # Aktuelle Konfiguration anzeigen
+  current                                         # Aktuelle Arbeitszeit / Status (zeigt auch die eigene Account-ID)
 
-  range [FROM [TO]]    Standard-Zeitraum für 'hours' anzeigen/speichern
-    range                    aktuell gespeicherten Zeitraum anzeigen
-    range 20.07.26 19.08.26  from und to speichern
-    range --from 20.07.26    nur from speichern (--to analog)
-    range clear              gespeicherten Zeitraum löschen (zurück zum Standard)
+  in       [--time hh:mm] [--location h|b]        # Einloggen (Anfangsbuchung). 
+                                                  # --location h = HomeOffice (Standard), b = reguläres Kommen (Büro).
+                                                  # Ohne --time gilt die aktuelle Uhrzeit.
 
-  hours    [--from D] [--to D] [--by-booking]
-                       Geleistete Stunden im Zeitraum summieren (+ Tagesaufstellung)
-                       Zeitraum-Vorrang: --from/--to  >  gespeichert (range)  >  Standard (20.–19.)
+  out      [--time hh:mm]                         # Ausloggen (schließt die laufende Arbeitszeit mit 'Gehen' ab).
+                                                  # Ohne --time gilt die aktuelle Uhrzeit.
+
+  range [FROM [TO]]                               # Standard-Zeitraum für 'hours' anzeigen/speichern
+    range                                         # aktuell gespeicherten Zeitraum anzeigen
+    range 20.07.26 19.08.26                       # from und to speichern
+    range --from 20.07.26                         # nur from speichern (--to analog)
+    range clear                                   # gespeicherten Zeitraum löschen (zurück zum Standard)
+
+  hours    [--from D] [--to D] [--by-booking]     # Geleistete Stunden im Zeitraum summieren (+ Tagesaufstellung)
+                                                  # Zeitraum-Vorrang: --from/--to  >  gespeichert (range)  >  Standard (20.-19.)
+                       
 
 DATUMSFORMATE
   20.05.26   20.05.2026   2026-05-20   today
@@ -218,8 +284,12 @@ DATUMSFORMATE
 BEISPIELE
   ${PROG} login
   ${PROG} current
-  ${PROG} range 20.07.26 19.08.26     # Zeitraum einmalig festlegen
-  ${PROG} hours                       # nutzt den gespeicherten Zeitraum
+  ${PROG} in                                    # HomeOffice-Login zur aktuellen Uhrzeit
+  ${PROG} in --location b --time 09:00          # Kommen (Büro) um 09:00 buchen
+  ${PROG} out                                   # Ausloggen zur aktuellen Uhrzeit
+  ${PROG} out --time 17:30                      # Ausloggen um 17:30
+  ${PROG} range 20.07.26 19.08.26               # Zeitraum einmalig festlegen
+  ${PROG} hours                                 # nutzt den gespeicherten Zeitraum
   ${PROG} hours --from 20.05.26 --to 19.06.26   # überschreibt nur diesen Aufruf
 
 Standardmäßig filtert der Zeitraum nach Buchungstag (balanceDay). Mit --by-booking

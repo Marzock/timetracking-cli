@@ -10,12 +10,12 @@ geleistete Stunden in einem Zeitraum (mit Tages- und Wochenaufstellung).
 
 - `curl` und `jq` (auf macOS via `brew install jq`)
 - macOS (nutzt `security` für den Schlüsselbund und BSD-`date`)
-- Zugangsdaten – **eine** der beiden Varianten:
+- Zugangsdaten - **eine** der beiden Varianten:
   1. **Benutzername + Passwort** (deine normalen Login-Daten). Es wird per
      `POST /api/auth/authorize` ein kurzlebiger JWT-Token geholt und
-     zwischengespeichert – kein App-Token nötig.
+     zwischengespeichert - kein App-Token nötig.
   2. **App-Token** (Format `app_` + 64 Zeichen). In der Web-App unter den
-     Benutzer-/Profileinstellungen („App-Tokens" / API-Zugang) erzeugen –
+     Benutzer-/Profileinstellungen („App-Tokens" / API-Zugang) erzeugen -
      nur möglich, wenn man die Berechtigung dazu hat.
 
 ## Installation
@@ -59,6 +59,8 @@ Alternativ ohne `login` per Umgebungsvariablen: `TT_HOST`, `TT_USER`, `TT_TOKEN`
 | Befehl | Zweck |
 |--------|-------|
 | `tt current` | Aktueller Status / laufende Arbeitszeit (zeigt auch die eigene Account-ID). Aliase: `status`, `whoami` |
+| `tt in [--time hh:mm] [--location h\|b]` | Einloggen (Anfangsbuchung „Kommen"/„HomeOffice"). Alias: `kommen` |
+| `tt out [--time hh:mm]` | Ausloggen (Endbuchung „Gehen" für die laufende Arbeitszeit). Alias: `gehen` |
 | `tt hours --from D --to D` | Geleistete Stunden summieren (+ Tages- und Wochenaufstellung). Alias: `stunden` |
 | `tt range [FROM [TO]]` | Standard-Zeitraum für `hours` anzeigen/speichern/löschen. Alias: `zeitraum` |
 | `tt config` | Konfiguration anzeigen |
@@ -83,7 +85,27 @@ tt range clear                 # gespeicherten Zeitraum löschen (zurück zum St
 ```
 
 Zeitraum-Vorrang bei `hours`: `--from`/`--to` (pro Aufruf) > gespeichert (`range`)
-> Standard (20.–19.).
+> Standard (20.-19.).
+
+### Ein-/Ausloggen (`in` / `out`)
+
+Bucht die eigene Arbeitszeit (Endpunkte `.../entries/my` bzw.
+`.../entries/complete/{id}/my`).
+
+```sh
+tt in                          # HomeOffice-Login zur aktuellen Uhrzeit (Standard)
+tt in --location b             # reguläres „Kommen" (Büro) statt HomeOffice
+tt in --location b --time 09:00 # „Kommen" um 09:00 buchen
+tt out                         # Ausloggen zur aktuellen Uhrzeit
+tt out --time 17:30            # Ausloggen um 17:30
+```
+
+- `--time hh:mm` (optional): Uhrzeit der Buchung am heutigen Tag. Fehlt der
+  Parameter, wird die aktuelle Uhrzeit verwendet.
+- `--location h|b` (nur bei `in`, optional): `h` = HomeOffice (Standard),
+  `b` = reguläres Kommen (Büro).
+- `tt out` schließt den aktuell laufenden Eintrag ab; gibt es keinen offenen
+  Eintrag, bricht der Befehl mit einer Meldung ab.
 
 ### Stunden (`hours`)
 
