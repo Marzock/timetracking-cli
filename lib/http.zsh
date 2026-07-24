@@ -72,3 +72,31 @@ build_range_params() {
     [[ -n $to   ]] && PARAMS+=(--data-urlencode "toBalanceDate=${to}")
   fi
 }
+
+# ---------------------------------------------------------------------------
+# Urlaub (Abwesenheiten) im Zeitraum abrufen
+# ---------------------------------------------------------------------------
+# fetch_vacation FROM TO  -> gibt auf stdout ein JSON-Array bestätigter Urlaubstage
+# (exceptionType.internalName == "VACATION", approvalState == "APPROVED") aus.
+# Schlägt der Abruf fehl, wird gewarnt und "[]" ausgegeben (Stunden bleiben nutzbar).
+fetch_vacation() {
+  local from=$1 to=$2
+  local acc=${OPT_ACCOUNT:-$TT_ACCOUNT_ID}
+  # Eigener User: .../slimmed/my ; für fremde Konten (-a): .../slimmed?accountId=...
+  local endpoint="/working_time_exceptions/slimmed/my"
+  local params=(-G --data-urlencode "source=ABSENCE_CALENDAR"
+                --data-urlencode "fromDate=${from}" --data-urlencode "toDate=${to}")
+  if [[ -n $acc ]]; then
+    endpoint="/working_time_exceptions/slimmed"
+    params+=(--data-urlencode "accountId=${acc}")
+  fi
+  local resp
+  if ! resp=$(request GET "$endpoint" "${params[@]}"); then
+    warn "Urlaub konnte nicht geladen werden - Stunden ohne Urlaub berechnet (--no-vacation unterdrückt diese Warnung)."
+    print -- "[]"; return 0
+  fi
+  print -r -- "$resp" | jq -c '
+    [ .[] | select((.exceptionType.internalName == "VACATION")
+                   and (.approvalState == "APPROVED")) ]' 2>/dev/null \
+    || print -- "[]"
+}

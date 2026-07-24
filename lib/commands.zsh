@@ -136,12 +136,13 @@ cmd_current() {
 }
 
 cmd_hours() {
-  local from="" to="" by_booking=0
+  local from="" to="" by_booking=0 with_vacation=1
   while (( $# )); do
     case $1 in
       --from|-f) from=$(norm_date "$2"); shift 2 ;;
       --to|-t)   to=$(norm_date "$2"); shift 2 ;;
       --by-booking) by_booking=1; shift ;;
+      --no-vacation|--no-urlaub|--ohne-urlaub) with_vacation=0; shift ;;
       *) die "hours: unbekannte Option '$1'" ;;
     esac
   done
@@ -154,27 +155,46 @@ cmd_hours() {
   build_range_params "$from" "$to" "$by_booking"
   local out
   out=$(request GET "/working_time/entries" "${PARAMS[@]}") || return 1
-  if (( OPT_JSON )); then print -r -- "$out"; return; fi
+
+  # Urlaub (Abwesenheiten) im selben Zeitraum holen; leeres Array, wenn deaktiviert.
+  local vac="[]"
+  (( with_vacation )) && vac=$(fetch_vacation "$from" "$to")
+
+  if (( OPT_JSON )); then
+    jq -n --argjson work "$out" --argjson vac "$vac" '{work:$work, vacation:$vac}'
+    return
+  fi
 
   local from_disp=$(date -j -f "%Y-%m-%d" "$from" "+%d.%m.%y" 2>/dev/null || print -- "$from")
   local to_disp=$(date -j -f "%Y-%m-%d" "$to" "+%d.%m.%y" 2>/dev/null || print -- "$to")
 
-  print -r -- "$out" | jq -r "$JQ_LIB"'
-    real_entries as $e
-    | ($e | map(dur_secs) | add // 0) as $total
-    | ($e | group_by(.balanceDay // (.beginningDate[0:10]))
-          | map({day: (.[0].balanceDay // (.[0].beginningDate[0:10])),
-                 secs: (map(dur_secs) | add // 0)})
+  jq -rn --argjson work "$out" --argjson vac "$vac" "$JQ_LIB"'
+    ($work | real_entries
+      | map({day: (.balanceDay // (.beginningDate[0:10])), work: dur_secs, vac: 0})) as $we
+    # Nur bestätigter Urlaub, dessen Tag im Zeitraum liegt; Netto-Minuten -> Sekunden.
+    | ($vac
+        | map(select(.begin >= "'"$from"'" and .begin <= "'"$to"'"))
+        | map({day: .begin, work: 0, vac: ((.exceptionMinutesNet // 0) * 60)})) as $ve
+    | ($we + $ve) as $all
+    | ($all | map(.work) | add // 0) as $total_work
+    | ($all | map(.vac)  | add // 0) as $total_vac
+    | ($total_work + $total_vac) as $total
+    | ($all | group_by(.day)
+          | map({day: .[0].day,
+                 work: (map(.work) | add // 0),
+                 vac:  (map(.vac)  | add // 0),
+                 secs: (map(.work + .vac) | add // 0)})
           | sort_by(.day)) as $days
     | ($days | group_by(.day | week_monday) | sort_by(.[0].day)) as $weeks
     | "Zeitraum:      '"$from_disp"'  bis  '"$to_disp"'",
-      "Einträge:      \($e | length)   an \($days | length) Tag(en)",
+      "Einträge:      \($work | real_entries | length)   an \($days | length) Tag(en)",
+      (if $total_vac > 0 then "davon Urlaub:  \($total_vac | hhmm)   (\((($total_vac/3600)*100|round)/100) h)" else empty end),
       "",
       "Tag                Stunden",
       ($weeks[]
         | ((map(.secs) | add) // 0) as $wsecs
         | (
-            (.[] | "\(.day | wday_de) \(.day | ddmmyy)      \(.secs | hhmm)   (\((.secs/3600*100|round)/100) h)"),
+            (.[] | "\(.day | wday_de) \(.day | ddmmyy)      \(.secs | hhmm)   (\((.secs/3600*100|round)/100) h)\(if .vac > 0 then "   [Urlaub]" else "" end)"),
             "─────────────────────────────────",
             "                \($wsecs | hhmm)   (\((($wsecs/3600)*100|round)/100) h)",
             ""
@@ -275,8 +295,10 @@ BEFEHLE
     range clear                                   # gespeicherten Zeitraum löschen (zurück zum Standard)
 
   hours    [--from D] [--to D] [--by-booking]     # Geleistete Stunden im Zeitraum summieren (+ Tagesaufstellung)
-                                                  # Zeitraum-Vorrang: --from/--to  >  gespeichert (range)  >  Standard (20.-19.)
-                       
+           [--no-vacation]                        # Zeitraum-Vorrang: --from/--to  >  gespeichert (range)  >  Standard (20.-19.)
+                                                  # Urlaub zählt standardmäßig mit (Tage mit [Urlaub] markiert);
+                                                  # --no-vacation rechnet ohne Urlaub.
+
 
 DATUMSFORMATE
   20.05.26   20.05.2026   2026-05-20   today
@@ -289,10 +311,14 @@ BEISPIELE
   ${PROG} out                                   # Ausloggen zur aktuellen Uhrzeit
   ${PROG} out --time 17:30                      # Ausloggen um 17:30
   ${PROG} range 20.07.26 19.08.26               # Zeitraum einmalig festlegen
-  ${PROG} hours                                 # nutzt den gespeicherten Zeitraum
+  ${PROG} hours                                 # nutzt den gespeicherten Zeitraum (inkl. Urlaub)
+  ${PROG} hours --no-vacation                   # nur tatsächlich geleistete Stunden, ohne Urlaub
   ${PROG} hours --from 20.05.26 --to 19.06.26   # überschreibt nur diesen Aufruf
 
 Standardmäßig filtert der Zeitraum nach Buchungstag (balanceDay). Mit --by-booking
 wird stattdessen nach dem tatsächlichen Buchungszeitstempel gefiltert.
+
+Genehmigter Urlaub wird als Arbeitszeit mitgezählt (Netto-Wert laut Zeitmodell,
+z.B. ganzer Tag = Tagessoll, halber Tag = die Hälfte). Mit --no-vacation weglassen.
 EOF
 }

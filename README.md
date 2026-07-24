@@ -110,13 +110,19 @@ tt out --time 17:30            # Ausloggen um 17:30
 ### Stunden (`hours`)
 
 ```sh
-tt hours                                     # gespeicherter Zeitraum oder Standard
+tt hours                                     # gespeicherter Zeitraum oder Standard (inkl. Urlaub)
 tt hours --from 20.05.26 --to 19.06.26       # überschreibt nur diesen Aufruf
 tt hours --by-booking                        # nach Buchungszeitstempel filtern
+tt hours --no-vacation                       # nur geleistete Stunden, ohne Urlaub
 ```
 
 Standardmäßig filtert `hours` nach Buchungstag (`balanceDay`). Mit `--by-booking`
 wird stattdessen nach dem tatsächlichen Buchungszeitstempel gefiltert.
+
+Genehmigter Urlaub wird als Arbeitszeit mitgerechnet: pro Tag mit dem Netto-Wert
+laut Zeitmodell (ganzer Tag = Tagessoll, halber Tag = die Hälfte). Betroffene Tage
+sind in der Aufstellung mit `[Urlaub]` markiert; die Summenzeile weist den
+Urlaubsanteil zusätzlich aus. Mit `--no-vacation` bleibt Urlaub außen vor.
 
 ## Konfiguration
 
@@ -145,8 +151,8 @@ tt hours
 # Geleistete Stunden in einem beliebigen Abrechnungszeitraum
 tt hours --from 20.05.26 --to 19.06.26
 
-# Rohes JSON für Weiterverarbeitung
-tt -j hours --from 2026-05-20 --to 2026-06-19 | jq '.[].beginningDate'
+# Rohes JSON für Weiterverarbeitung ({work: [...], vacation: [...]})
+tt -j hours --from 2026-05-20 --to 2026-06-19 | jq '.work[].beginningDate'
 ```
 
 ## Aufbau
